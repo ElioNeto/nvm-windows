@@ -1,0 +1,112 @@
+name: Unicode Path Tests
+
+on:
+  push:
+    branches: [ master, develop ]
+  pull_request:
+    branches: [ master, develop ]
+
+jobs:
+  test-encoding:
+    name: Test Unicode Encoding
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+      
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          cd src
+          go mod download
+      
+      - name: Run encoding tests
+        shell: pwsh
+        run: |
+          cd src
+          go test ./encoding -v -race -coverprofile=coverage.txt -covermode=atomic
+      
+      - name: Run all tests
+        shell: pwsh
+        run: |
+          cd src
+          go test ./... -v -race
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./src/coverage.txt
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+  
+  test-unicode-paths:
+    name: Test with Unicode Usernames
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+      
+      - name: Build NVM
+        shell: pwsh
+        run: |
+          cd src
+          go build -o ../nvm-test.exe
+      
+      - name: Test with special character paths
+        shell: pwsh
+        run: |
+          # Create test directories with special characters
+          $testPaths = @(
+            "$env:TEMP\TestUser_Müller",
+            "$env:TEMP\TestUser_José",
+            "$env:TEMP\TestUser_René",
+            "$env:TEMP\TestUser_Åsa"
+          )
+          
+          foreach ($testPath in $testPaths) {
+            Write-Host "Testing with path: $testPath"
+            
+            # Create directory
+            New-Item -ItemType Directory -Path $testPath -Force | Out-Null
+            
+            # Create a test settings.txt with UTF-8 encoding
+            $settingsPath = Join-Path $testPath "settings.txt"
+            $content = "root: $testPath`r`narch: 64`r`nproxy: none`r`n"
+            
+            # Write with UTF-8 BOM
+            $utf8BOM = New-Object System.Text.UTF8Encoding $true
+            [System.IO.File]::WriteAllText($settingsPath, $content, $utf8BOM)
+            
+            # Verify the file can be read correctly
+            $readContent = Get-Content $settingsPath -Encoding UTF8 -Raw
+            
+            if ($readContent -notmatch [regex]::Escape($testPath)) {
+              Write-Error "Failed to read Unicode path correctly from: $settingsPath"
+              Write-Host "Expected path: $testPath"
+              Write-Host "Read content: $readContent"
+              exit 1
+            }
+            
+            Write-Host "✓ Successfully handled path: $testPath"
+          }
+          
+          Write-Host "`n✓ All Unicode path tests passed!"
+      
+      - name: Cleanup test directories
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-Item "$env:TEMP\TestUser_*" -Recurse -Force -ErrorAction SilentlyContinue
